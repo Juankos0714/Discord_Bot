@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comparación de IAs con Discord</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 90%;
+            max-width: 1000px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        textarea {
+            width: calc(100% - 22px);
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            font-size: 16px;
+            min-height: 80px;
+        }
+        .button-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            flex: 1;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .discord-btn {
+            background-color: #7289DA;
+        }
+        .discord-btn:hover {
+            background-color: #5b6eae;
+        }
+        #responseContainer {
+            margin-top: 20px;
+            white-space: pre-wrap;
+        }
+        .response-box {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+        }
+        .response-box h3 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+        }
+        .response-box.gemini {
+            border-left: 4px solid #4285f4;
+        }
+        .response-box.cohere {
+            border-left: 4px solid #ff6b35;
+        }
+        .response-box.mistral {
+            border-left: 4px solid #7c3aed;
+        }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 4px solid #3498db;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+            display: none;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .responses-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .discord-status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        .discord-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .discord-error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .help-text {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #2196F3;
+        }
+        @media (max-width: 768px) {
+            .responses-grid {
+                grid-template-columns: 1fr;
+            }
+            .button-container {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Comparación de IAs con Discord Integration</h1>
+        <p style="text-align: center; color: #666;">Gemini • Cohere • Mistral • Discord</p>
+        
+        <div class="help-text">
+            <strong>💡 Cómo funciona:</strong>
+            <ul>
+                <li><strong>Consultar IAs:</strong> Obtén respuestas de las 3 IAs. Si mencionas "Discord" o "enviar a Discord", automáticamente se enviará a Discord.</li>
+                <li><strong>Enviar solo a Discord:</strong> Envía directamente tu mensaje al canal de Discord sin consultar las IAs.</li>
+            </ul>
+        </div>
+        
+        <textarea id="inputText" placeholder="Escribe tu pregunta o mensaje aquí... 
+
+Ejemplos:
+• Explica cómo funciona la IA
+• Enviar esto a Discord: ¡Hola desde la web!
+• Mandar a Discord el resultado de esta pregunta"></textarea>
+        
+        <div class="button-container">
+            <button onclick="sendToAllAIs()">📊 Consultar IAs (+ Discord si se menciona)</button>
+            <button class="discord-btn" onclick="sendDirectToDiscord()">🚀 Enviar Solo a Discord</button>
+        </div>
+        
+        <div class="loader" id="loader"></div>
+        <h2>Respuestas:</h2>
+        <div id="responseContainer" class="responses-grid">
+        </div>
+    </div>
+    
+    <script>
+        async function sendToAllAIs() {
+            const inputText = document.getElementById('inputText').value;
+            const responseContainer = document.getElementById('responseContainer');
+            const loader = document.getElementById('loader');
+
+            if (!inputText.trim()) {
+                responseContainer.innerHTML = "<div style='text-align: center; color: #666;'>Por favor, ingresa algún texto.</div>";
+                return;
+            }
+
+            responseContainer.innerHTML = ""; 
+            loader.style.display = 'block'; 
+
+            try {
+                const response = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ inputText })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Error en el servidor');
+                }
+
+                const data = await response.json();
+                displayResponses(data.gemini, data.cohere, data.mistral, data.discord, responseContainer);
+            } catch (error) {
+                console.error("Error en las solicitudes:", error);
+                responseContainer.innerHTML = `<div style='text-align: center; color: red;'>Error: ${error.message}</div>`;
+            } finally {
+                loader.style.display = 'none'; 
+            }
+        }
+
+        async function sendDirectToDiscord() {
+            const inputText = document.getElementById('inputText').value;
+            const responseContainer = document.getElementById('responseContainer');
+            const loader = document.getElementById('loader');
+
+            if (!inputText.trim()) {
+                responseContainer.innerHTML = "<div style='text-align: center; color: #666;'>Por favor, ingresa algún texto.</div>";
+                return;
+            }
+
+            loader.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/discord', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message: inputText })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    responseContainer.innerHTML = `
+                        <div style='text-align: center; color: green; padding: 20px; border: 2px solid #4CAF50; border-radius: 8px; background-color: #f0f8f0;'>
+                            <h2>🚀 ¡MENSAJE ENVIADO A DISCORD!</h2>
+                            <p style='font-size: 18px; margin: 15px 0;'><strong>${data.message}</strong></p>
+                            <div style='background-color: white; padding: 10px; border-radius: 4px; margin-top: 15px;'>
+                                <strong>Mensaje enviado:</strong><br>
+                                <em>"${inputText}"</em>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    responseContainer.innerHTML = `
+                        <div style='text-align: center; color: red; padding: 20px; border: 2px solid #f44336; border-radius: 8px; background-color: #fdf0f0;'>
+                            <h3>❌ Error al enviar a Discord</h3>
+                            <p>${data.error}</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error("Error:", error);
+                responseContainer.innerHTML = `
+                    <div style='text-align: center; color: red; padding: 20px; border: 2px solid #f44336; border-radius: 8px; background-color: #fdf0f0;'>
+                        <h3>❌ Error de conexión</h3>
+                        <p>No se pudo conectar con el servidor: ${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                loader.style.display = 'none';
+            }
+        }
+
+        function displayResponses(geminiResponse, cohereResponse, mistralResponse, discordStatus, container) {
+            let discordSection = '';
+            
+            if (discordStatus) {
+                const statusColor = discordStatus.sent ? '#4CAF50' : '#f44336';
+                const bgColor = discordStatus.sent ? '#f0f8f0' : '#fdf0f0';
+                const icon = discordStatus.sent ? '✅' : '❌';
+                
+                discordSection = `
+                    <div style='text-align: center; color: ${statusColor}; padding: 20px; border: 2px solid ${statusColor}; border-radius: 8px; background-color: ${bgColor}; margin-bottom: 20px;'>
+                        <h2>${icon} Discord Status</h2>
+                        <p style='font-size: 18px; margin: 0;'><strong>${discordStatus.message}</strong></p>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = `
+                ${discordSection}
+                
+                <div class="response-box gemini">
+                    <h3>🔷 Respuesta de Gemini</h3>
+                    <div>${geminiResponse.success ? geminiResponse.text.replace(/\n/g, '<br>') : `<span style="color: red;">${geminiResponse.error}</span>`}</div>
+                </div>
+                
+                <div class="response-box cohere">
+                    <h3>🟠 Respuesta de Cohere</h3>
+                    <div>${cohereResponse.success ? cohereResponse.text.replace(/\n/g, '<br>') : `<span style="color: red;">${cohereResponse.error}</span>`}</div>
+                </div>
+                
+                <div class="response-box mistral">
+                    <h3>🟣 Respuesta de Mistral</h3>
+                    <div>${mistralResponse.success ? mistralResponse.text.replace(/\n/g, '<br>') : `<span style="color: red;">${mistralResponse.error}</span>`}</div>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
