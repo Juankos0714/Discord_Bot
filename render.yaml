@@ -4,9 +4,10 @@ services:
     name: discord-ai-comparison
     env: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --production
     startCommand: npm start
     healthCheckPath: /
+    # Variables de entorno básicas
     envVars:
       - key: NODE_ENV
         value: production
@@ -15,18 +16,16 @@ services:
           type: web
           name: discord-ai-comparison
           property: port
-    # Usar Environment Group para variables sensibles
+    # Variables sensibles desde Environment Group
     envVarsFromGroup: ai-bot-secrets
+    # Configuración de región
     regions:
       - oregon
+    # Configuración de escalado
     scaling:
-      minInstances: 1
+      minInstances: 0  # Permite que se apague cuando no se usa (plan gratuito)
       maxInstances: 1
-    # Configuración de salud y recursos
-    disk:
-      name: discord-ai-data
-      mountPath: /opt/render/project/data
-      sizeGB: 1
     # Auto-deploy desde GitHub
     autoDeploy: true
-
+    # Configuración adicional para evitar conflictos
+    preDeployCommand: "pkill -f 'node server.js' || true"
