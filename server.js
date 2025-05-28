@@ -6,7 +6,7 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configuración de Discord (si tienes discord.js instalado)
+// Configuración de Discord
 let client = null;
 if (process.env.DISCORD_TOKEN) {
     try {
@@ -29,18 +29,30 @@ if (process.env.DISCORD_TOKEN) {
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname)));
 
-// Función para crear resumen corto para Discord
+// Ruta principal
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Función para detectar si debe enviar a Discord
+function shouldSendToDiscord(inputText) {
+    const discordKeywords = ['discord', 'enviar', 'mandar', 'send to discord', 'enviar a discord', 'mandar a discord'];
+    const lowerText = inputText.toLowerCase();
+    return discordKeywords.some(keyword => lowerText.includes(keyword));
+}
+
+// Función para crear resumen para Discord
 function createDiscordSummary(responses, inputText, maxLength = 1900) {
     let summary = `📝 **Pregunta:** ${inputText.substring(0, 200)}${inputText.length > 200 ? '...' : ''}\n\n`;
     summary += "📊 **Comparación de Respuestas:**\n\n";
     
-    // Calcular espacio disponible
-    const headerSpace = summary.length + 100; // Buffer
+    const headerSpace = summary.length + 100;
     const availableSpace = maxLength - headerSpace;
-    const spacePerResponse = Math.floor(availableSpace / 3) - 50; // Margen de seguridad
+    const spacePerResponse = Math.floor(availableSpace / 3) - 50;
     
     if (responses.gemini?.success) {
         const truncated = responses.gemini.text.length > spacePerResponse ? 
@@ -77,65 +89,75 @@ function createDiscordSummary(responses, inputText, maxLength = 1900) {
 }
 
 // Función para enviar a Discord
-async function sendToDiscord(responses, inputText) {
+async function sendToDiscord(content, inputText = null) {
     if (!client || !process.env.DISCORD_CHANNEL_ID) {
-        console.log('⚠️ Discord no configurado, saltando envío');
-        return;
+        console.log('⚠️ Discord no configurado');
+        return { sent: false, message: 'Discord no configurado' };
     }
 
     try {
         const channel = client.channels.cache.get(process.env.DISCORD_CHANNEL_ID);
         if (!channel) {
             console.error('❌ Canal de Discord no encontrado');
-            return;
+            return { sent: false, message: 'Canal no encontrado' };
         }
 
-        const summary = createDiscordSummary(responses, inputText);
+        let messageToSend;
         
-        // Verificar longitud final antes de enviar
-        if (summary.length > 2000) {
-            console.warn(`⚠️ Mensaje aún muy largo: ${summary.length} caracteres`);
-            // Enviar versión ultra-corta como respaldo
-            const shortSummary = `📝 **Pregunta:** ${inputText.substring(0, 100)}...\n\n` +
-                                `🤖 Respuestas generadas por Gemini, Cohere y Mistral.\n` +
-                                `💻 Ver detalles completos en la interfaz web.`;
-            await channel.send(shortSummary);
+        if (typeof content === 'string') {
+            // Mensaje directo
+            messageToSend = content;
         } else {
-            await channel.send(summary);
+            // Resumen de respuestas de IA
+            messageToSend = createDiscordSummary(content, inputText);
         }
         
+        // Verificar longitud
+        if (messageToSend.length > 2000) {
+            console.warn(`⚠️ Mensaje muy largo: ${messageToSend.length} caracteres, truncando...`);
+            if (typeof content === 'string') {
+                messageToSend = messageToSend.substring(0, 1950) + '...\n*[Mensaje truncado]*';
+            } else {
+                messageToSend = `📝 **Pregunta:** ${inputText.substring(0, 100)}...\n\n` +
+                              `🤖 Respuestas generadas por Gemini, Cohere y Mistral.\n` +
+                              `💻 Ver detalles completos en la interfaz web.`;
+            }
+        }
+        
+        await channel.send(messageToSend);
         console.log('✅ Mensaje enviado a Discord exitosamente');
+        return { sent: true, message: 'Mensaje enviado exitosamente a Discord' };
         
     } catch (error) {
         console.error('❌ Error enviando a Discord:', error.message);
+        return { sent: false, message: `Error: ${error.message}` };
     }
 }
 
-// Endpoint para obtener las respuestas de las IAs
+// Endpoint principal para consultas a las IAs
 app.post('/api/query', async (req, res) => {
     const { inputText } = req.body;
     
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    const cohereApiKey = process.env.COHERE_API_KEY;
-    const mistralApiKey = process.env.MISTRAL_API_KEY;
-
     if (!inputText || !inputText.trim()) {
         return res.status(400).json({ error: 'Por favor, proporciona un texto válido.' });
     }
+
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const cohereApiKey = process.env.COHERE_API_KEY;
+    const mistralApiKey = process.env.MISTRAL_API_KEY;
 
     if (!geminiApiKey || !cohereApiKey || !mistralApiKey) {
         return res.status(500).json({ error: 'Faltan claves API necesarias. Verifica tu archivo .env' });
     }
 
     try {
-        const geminiPromise = fetchGeminiResponse(inputText, geminiApiKey);
-        const coherePromise = fetchCohereResponse(inputText, cohereApiKey);
-        const mistralPromise = fetchMistralResponse(inputText, mistralApiKey);
+        console.log(`🤖 Procesando consulta: "${inputText.substring(0, 50)}..."`);
         
+        // Ejecutar consultas a las IAs en paralelo
         const [geminiResponse, cohereResponse, mistralResponse] = await Promise.all([
-            geminiPromise, 
-            coherePromise, 
-            mistralPromise
+            fetchGeminiResponse(inputText, geminiApiKey),
+            fetchCohereResponse(inputText, cohereApiKey),
+            fetchMistralResponse(inputText, mistralApiKey)
         ]);
         
         const responseData = {
@@ -144,75 +166,92 @@ app.post('/api/query', async (req, res) => {
             mistral: mistralResponse
         };
         
-        // Enviar a Discord (no bloquear la respuesta HTTP)
-        sendToDiscord(responseData, inputText).catch(err => {
-            console.error('Error en envío a Discord:', err);
-        });
+        // Verificar si debe enviar a Discord
+        let discordStatus = null;
+        if (shouldSendToDiscord(inputText)) {
+            console.log('📤 Enviando a Discord...');
+            discordStatus = await sendToDiscord(responseData, inputText);
+        }
+        
+        // Incluir estado de Discord en la respuesta
+        if (discordStatus) {
+            responseData.discord = discordStatus;
+        }
         
         res.json(responseData);
+        
     } catch (error) {
-        console.error("Error en las solicitudes:", error);
+        console.error("❌ Error en las solicitudes:", error);
         res.status(500).json({ error: 'Error al conectar con las APIs' });
     }
 });
 
+// Endpoint específico para Discord
+app.post('/api/discord', async (req, res) => {
+    const { message } = req.body;
+    
+    if (!message || !message.trim()) {
+        return res.status(400).json({ success: false, error: 'Por favor, proporciona un mensaje válido.' });
+    }
+
+    try {
+        console.log(`📤 Enviando mensaje directo a Discord: "${message.substring(0, 50)}..."`);
+        const result = await sendToDiscord(message);
+        res.json({ success: result.sent, message: result.message });
+    } catch (error) {
+        console.error('❌ Error en endpoint de Discord:', error);
+        res.status(500).json({ success: false, error: 'Error interno del servidor' });
+    }
+});
+
+// Funciones para las APIs de IA
 async function fetchGeminiResponse(inputText, apiKey) {
     const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
     const requestBody = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": inputText
-                    }
-                ]
-            }
-        ]
+        contents: [{
+            parts: [{ text: inputText }]
+        }]
     };
 
     try {
         const response = await fetch(API_URL, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Error en la API de Gemini:", errorData);
+            const errorData = await response.json().catch(() => ({}));
             return {
                 success: false,
-                error: `Error: ${response.status} - ${errorData.error?.message || 'Error desconocido'}`
+                error: `Error ${response.status}: ${errorData.error?.message || 'Error desconocido'}`
             };
         }
 
         const data = await response.json();
 
-        if (data.candidates && data.candidates.length > 0 && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts.length > 0) {
+        if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
             return {
                 success: true,
                 text: data.candidates[0].content.parts[0].text
             };
-        } else if (data.promptFeedback && data.promptFeedback.blockReason) {
+        } else if (data.promptFeedback?.blockReason) {
             return {
                 success: false,
-                error: `Solicitud bloqueada: ${data.promptFeedback.blockReason}. Razón: ${data.promptFeedback.blockReasonMessage || 'No se proporcionó un mensaje específico.'}`
+                error: `Solicitud bloqueada: ${data.promptFeedback.blockReason}`
             };
         } else {
-            console.log("Respuesta completa de la API Gemini:", data);
             return {
                 success: false,
-                error: "No se recibió contenido en la respuesta o la estructura es inesperada."
+                error: "Respuesta inesperada de la API"
             };
         }
     } catch (error) {
-        console.error("Error en la solicitud a Gemini:", error);
+        console.error("Error Gemini:", error.message);
         return {
             success: false,
-            error: "Error al conectar con la API de Gemini."
+            error: "Error de conexión con Gemini"
         };
     }
 }
@@ -221,13 +260,10 @@ async function fetchCohereResponse(inputText, apiKey) {
     const API_URL = "https://api.cohere.ai/v1/generate";
 
     const requestBody = {
-        "model": "command",
-        "prompt": inputText,
-        "max_tokens": 300,
-        "temperature": 0.7,
-        "k": 0,
-        "stop_sequences": [],
-        "return_likelihoods": "NONE"
+        model: "command",
+        prompt: inputText,
+        max_tokens: 300,
+        temperature: 0.7
     };
 
     try {
@@ -241,33 +277,31 @@ async function fetchCohereResponse(inputText, apiKey) {
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Error en la API de Cohere:", errorData);
+            const errorData = await response.json().catch(() => ({}));
             return {
                 success: false,
-                error: `Error: ${response.status} - ${errorData.message || 'Error desconocido'}`
+                error: `Error ${response.status}: ${errorData.message || 'Error desconocido'}`
             };
         }
 
         const data = await response.json();
 
-        if (data.generations && data.generations.length > 0 && data.generations[0].text) {
+        if (data.generations?.[0]?.text) {
             return {
                 success: true,
                 text: data.generations[0].text.trim()
             };
         } else {
-            console.log("Respuesta completa de la API Cohere:", data);
             return {
                 success: false,
-                error: "No se recibió contenido en la respuesta o la estructura es inesperada."
+                error: "Respuesta inesperada de la API"
             };
         }
     } catch (error) {
-        console.error("Error en la solicitud a Cohere:", error);
+        console.error("Error Cohere:", error.message);
         return {
             success: false,
-            error: "Error al conectar con la API de Cohere."
+            error: "Error de conexión con Cohere"
         };
     }
 }
@@ -276,15 +310,13 @@ async function fetchMistralResponse(inputText, apiKey) {
     const API_URL = "https://api.mistral.ai/v1/chat/completions";
 
     const requestBody = {
-        "model": "mistral-small-latest",
-        "messages": [
-            {
-                "role": "user",
-                "content": inputText
-            }
-        ],
-        "max_tokens": 300,
-        "temperature": 0.7
+        model: "mistral-small-latest",
+        messages: [{
+            role: "user",
+            content: inputText
+        }],
+        max_tokens: 300,
+        temperature: 0.7
     };
 
     try {
@@ -298,36 +330,64 @@ async function fetchMistralResponse(inputText, apiKey) {
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Error en la API de Mistral:", errorData);
+            const errorData = await response.json().catch(() => ({}));
             return {
                 success: false,
-                error: `Error: ${response.status} - ${errorData.error?.message || 'Error desconocido'}`
+                error: `Error ${response.status}: ${errorData.error?.message || 'Error desconocido'}`
             };
         }
 
         const data = await response.json();
 
-        if (data.choices && data.choices.length > 0 && data.choices[0].message && data.choices[0].message.content) {
+        if (data.choices?.[0]?.message?.content) {
             return {
                 success: true,
                 text: data.choices[0].message.content
             };
         } else {
-            console.log("Respuesta completa de la API Mistral:", data);
             return {
                 success: false,
-                error: "No se recibió contenido en la respuesta o la estructura es inesperada."
+                error: "Respuesta inesperada de la API"
             };
         }
     } catch (error) {
-        console.error("Error en la solicitud a Mistral:", error);
+        console.error("Error Mistral:", error.message);
         return {
             success: false,
-            error: "Error al conectar con la API de Mistral."
+            error: "Error de conexión con Mistral"
         };
     }
 }
+
+// Manejo de errores
+app.use((err, req, res, next) => {
+    console.error('Error del servidor:', err);
+    res.status(500).json({ error: 'Error interno del servidor' });
+});
+
+// Manejo de rutas no encontradas
+app.use((req, res) => {
+    res.status(404).json({ error: 'Endpoint no encontrado' });
+});
+
+app.listen(PORT, () => {
+    console.log(`🚀 Servidor ejecutándose en http://localhost:${PORT}`);
+    console.log(`📁 Sirviendo archivos desde: ${__dirname}`);
+    
+    // Verificar configuración
+    const requiredEnvVars = ['GEMINI_API_KEY', 'COHERE_API_KEY', 'MISTRAL_API_KEY'];
+    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+    
+    if (missingVars.length > 0) {
+        console.warn(`⚠️ Variables de entorno faltantes: ${missingVars.join(', ')}`);
+    }
+    
+    if (process.env.DISCORD_TOKEN && process.env.DISCORD_CHANNEL_ID) {
+        console.log('✅ Discord configurado correctamente');
+    } else {
+        console.log('⚠️ Discord no configurado (opcional)');
+    }
+});
 
 app.listen(PORT, () => {
     console.log(`🚀 Servidor ejecutándose en http://localhost:${PORT}`);
