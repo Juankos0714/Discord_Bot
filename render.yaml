@@ -1,0 +1,32 @@
+services:
+  # Servicio principal de la aplicación
+  - type: web
+    name: discord-ai-comparison
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromService:
+          type: web
+          name: discord-ai-comparison
+          property: port
+    # Usar Environment Group para variables sensibles
+    envVarsFromGroup: ai-bot-secrets
+    regions:
+      - oregon
+    scaling:
+      minInstances: 1
+      maxInstances: 1
+    # Configuración de salud y recursos
+    disk:
+      name: discord-ai-data
+      mountPath: /opt/render/project/data
+      sizeGB: 1
+    # Auto-deploy desde GitHub
+    autoDeploy: true
+
